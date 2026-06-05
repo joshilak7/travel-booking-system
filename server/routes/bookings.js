@@ -1,177 +1,108 @@
 const express = require("express");
 const router = express.Router();
 const Booking = require("../models/Booking");
-const Car = require("../models/Car");
-const Place = require("../models/Place");
-const { protect } = require("../middleware/auth");
 
-// @route   POST /api/bookings
-// @desc    Create a booking
-// @access  Private
-router.post("/", protect, async (req, res) => {
+// @route   POST /api/bookings/inquiry
+// @desc    Create booking inquiry
+// @access  Public
+router.post("/inquiry", async (req, res) => {
   try {
     const {
-      bookingType,
-      itemId,
-      startDate,
-      endDate,
-      guests,
-      specialRequests,
-      contactNumber,
+      fullName,
+      email,
+      phone,
+      service,
+      pickupDate,
+      pickupLocation,
+      passengers,
+      carId,
+      placeId,
+      message,
     } = req.body;
 
-    let totalPrice = 0;
-    let item;
-
-    if (bookingType === "car") {
-      item = await Car.findById(itemId);
-      if (!item) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Car not found" });
-      }
-      const days = Math.ceil(
-        (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24),
-      );
-      totalPrice = item.pricePerDay * days;
-    } else {
-      item = await Place.findById(itemId);
-      if (!item) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Place not found" });
-      }
-      totalPrice = item.entryFee * guests;
-    }
-
-    const booking = await Booking.create({
-      user: req.user.id,
-      bookingType,
-      itemId,
-      startDate,
-      endDate,
-      totalPrice,
-      guests: guests || 1,
-      specialRequests,
-      contactNumber: contactNumber || req.user.phone,
+    // Create new booking
+    const booking = new Booking({
+      bookingType: service,
+      car: carId || null,
+      place: placeId || null,
+      pickupDate: new Date(pickupDate),
+      pickupLocation: pickupLocation,
+      numberOfPassengers: parseInt(passengers),
+      fullName: fullName,
+      email: email,
+      phone: phone,
+      specialRequests: message,
+      message: message,
+      status: "pending",
     });
 
-    res.status(201).json({ success: true, booking });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-// @route   GET /api/bookings
-// @desc    Get all bookings for logged in user
-// @access  Private
-router.get("/", protect, async (req, res) => {
-  try {
-    const bookings = await Booking.find({ user: req.user.id })
-      .populate("itemId")
-      .sort({ createdAt: -1 });
-
-    res.json({ success: true, count: bookings.length, bookings });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-// @route   GET /api/bookings/:id
-// @desc    Get single booking
-// @access  Private
-router.get("/:id", protect, async (req, res) => {
-  try {
-    const booking = await Booking.findById(req.params.id)
-      .populate("user", "name email phone")
-      .populate("itemId");
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Booking not found" });
-    }
-
-    if (
-      booking.user._id.toString() !== req.user.id &&
-      req.user.role !== "admin"
-    ) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Not authorized" });
-    }
-
-    res.json({ success: true, booking });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-// @route   PUT /api/bookings/:id/cancel
-// @desc    Cancel a booking
-// @access  Private
-router.put("/:id/cancel", protect, async (req, res) => {
-  try {
-    const booking = await Booking.findById(req.params.id);
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Booking not found" });
-    }
-
-    if (booking.user.toString() !== req.user.id && req.user.role !== "admin") {
-      return res
-        .status(401)
-        .json({ success: false, message: "Not authorized" });
-    }
-
-    if (booking.status === "cancelled") {
-      return res
-        .status(400)
-        .json({ success: false, message: "Booking already cancelled" });
-    }
-
-    booking.status = "cancelled";
     await booking.save();
 
-    res.json({ success: true, booking });
+    // Send WhatsApp notification to admin (optional)
+    const adminWhatsapp = process.env.ADMIN_WHATSAPP || "919274713544";
+    const whatsappMsg = `*New Booking Inquiry*%0A%0A📋 ID: ${booking.bookingReference}%0A👤 Name: ${fullName}%0A📞 Phone: ${phone}%0A📧 Email: ${email}%0A🚗 Service: ${service}%0A📅 Date: ${pickupDate}%0A📍 Location: ${pickupLocation}%0A👥 Passengers: ${passengers}%0A💬 Message: ${message || "No message"}%0A%0A🔗 View: https://dhwanitourist.com/admin/bookings/${booking._id}`;
+
+    res.status(201).json({
+      success: true,
+      message: "Booking inquiry sent successfully",
+      bookingReference: booking.bookingReference,
+      data: booking,
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Booking error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create booking. Please try again.",
+    });
   }
 });
 
-// @route   PUT /api/bookings/:id/confirm
-// @desc    Confirm a booking (Admin only)
-// @access  Private/Admin
-router.put("/:id/confirm", protect, async (req, res) => {
+// @route   GET /api/bookings/:reference
+// @desc    Get booking by reference
+// @access  Public
+router.get("/:reference", async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res
-        .status(401)
-        .json({ success: false, message: "Not authorized" });
-    }
-
-    const booking = await Booking.findById(req.params.id);
-
+    const booking = await Booking.findOne({
+      bookingReference: req.params.reference,
+    });
     if (!booking) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Booking not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found",
+      });
     }
-
-    booking.status = "confirmed";
-    booking.paymentStatus = "paid";
-    await booking.save();
-
-    res.json({ success: true, booking });
+    res.json({
+      success: true,
+      data: booking,
+    });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+});
+
+// @route   GET /api/bookings/phone/:phone
+// @desc    Get bookings by phone number
+// @access  Public
+router.get("/phone/:phone", async (req, res) => {
+  try {
+    const bookings = await Booking.find({ phone: req.params.phone }).sort({
+      createdAt: -1,
+    });
+    res.json({
+      success: true,
+      count: bookings.length,
+      data: bookings,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 });
 
